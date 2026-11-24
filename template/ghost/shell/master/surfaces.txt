@@ -1,0 +1,9 @@
+surface0
+{
+element0,base,surface0.png,0,0
+}
+
+surface10
+{
+element0,base,surface10.png,0,0
+}
