@@ -1,4 +1,0 @@
-charset,UTF-8
-type,ghost
-name,__ASSISTANT_NAME__
-directory,muse
