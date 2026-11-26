@@ -59,8 +59,9 @@
   シェル単体はフォルダの中身をそのまま平置きし、ゴースト一式は
   ルートに install.txt・readme.txt、配下に ghost/master と shell/master を置く。
   手順の側で配置を組み立てない。
-- 作成したゴーストの OnBoot は、アニメーション確認用のデモに差し替える
-  （梱包用コピーの中だけ。テンプレート側の辞書は変更しない）。
+- 作成したゴーストの OnBoot は起動時モーションであり、梱包用コピーの辞書には
+  スクリプトの定数 ONBOOT の内容を設定する（テンプレート側の辞書は変更しない。
+  テンプレートの辞書も同じ内容を持つ）。
 - 検証までをスクリプトの責務とする。検証に落ちたら成果物を出さない。
 
 前提: Python 3 + Pillow、ffmpeg / ffprobe が使えること。
@@ -94,11 +95,11 @@ FRAME_BLOCKS = {0: 1000, 1: 1200, 2: 1300, 3: 1400, 4: 1500, 5: 1600, 6: 1700, 8
 # システム側としてテンプレートから取り込むファイル
 SYSTEM_FILES = [f"surface{i}.png" for i in range(10, 19)] + [f"surface{i}.png" for i in range(1100, 1116)]
 
-# 作成したゴーストの OnBoot はアニメーションのデモ用に差し替える（梱包用コピーの中だけ）。
+# ゴーストの OnBoot（起動時モーション）。正はこの定数であり、梱包用コピーの辞書に設定する。
 # 待機時間は各サーフェスのアニメーション長に合わせる: 本体側は全て 2000ms
 # （ループ・一回再生とも 20コマ×100ms、サーフェス4 は 10コマ×200ms）、静止画は 1000ms。
 # システム側サーフェス11 はテンプレートのアニメーション（16コマ×125ms = 2000ms）。
-DEMO_ONBOOT = (
+ONBOOT = (
     "\\1\\s[11]\\_w[2000]"
     "\\0\\s[1]\\_w[2000]"
     "\\0\\s[2]\\_w[2000]"
@@ -126,6 +127,8 @@ def glob1(directory: pathlib.Path, pattern: str) -> pathlib.Path:
     hits = sorted(directory.glob(pattern))
     if not hits:
         sys.exit(f"素材が見つかりません: {directory}/{pattern}")
+    if len(hits) > 1:
+        sys.exit(f"素材が複数あり、1つに定まりません: {directory}/{pattern} -> {[h.name for h in hits]}")
     return hits[0]
 
 
@@ -320,11 +323,11 @@ def build_shell(variant: str, mats: dict, tpl_shell: pathlib.Path, out_root: pat
 
 # ---------- 梱包（nar の配置規則はここだけが知る） ----------
 
-def prepare_tree(src: pathlib.Path, name: str, dest: pathlib.Path, onboot_demo: bool = False) -> pathlib.Path:
+def prepare_tree(src: pathlib.Path, name: str, dest: pathlib.Path, set_onboot: bool = False) -> pathlib.Path:
     """テンプレートのコピーを作り、名前のプレイスホルダを差し替える。
 
     satori_license.txt は改変禁止のため対象外（プレイスホルダも含まない）。
-    onboot_demo の場合、辞書の OnBoot をアニメーション確認用のデモに差し替える。
+    set_onboot の場合、辞書の OnBoot をアニメーション確認用のデモに差し替える。
     """
     if dest.exists():
         shutil.rmtree(dest)
@@ -335,10 +338,12 @@ def prepare_tree(src: pathlib.Path, name: str, dest: pathlib.Path, onboot_demo: 
         t = f.read_text(encoding="utf-8")
         if "__ASSISTANT_NAME__" in t:
             f.write_text(t.replace("__ASSISTANT_NAME__", name), encoding="utf-8")
-    if onboot_demo:
+    if set_onboot:
         dic_path = dest / "master" / "dic_muse.txt"
         dic = dic_path.read_text(encoding="utf-8")
-        dic = re.sub(r"＊OnBoot\n[^\n]*", lambda m: f"＊OnBoot\n{DEMO_ONBOOT}", dic, count=1)
+        dic, n_sub = re.subn(r"＊OnBoot\n[^\n]*", lambda m: f"＊OnBoot\n{ONBOOT}", dic)
+        if n_sub != 1:
+            sys.exit(f"辞書の OnBoot が1つに定まりません: {n_sub} 件")
         dic_path.write_text(dic, encoding="utf-8")
     return dest
 
@@ -405,9 +410,15 @@ def validate_shell_nar(nar: pathlib.Path) -> list[str]:
     errors += _check_texts_and_refs(texts, files, "")
     for n in names:
         if n.endswith(".png"):
-            im = Image.open(io.BytesIO(z.read(n))).convert("RGBA")
-            if im.getpixel((0, 0))[3] != 0:
-                errors.append(f"四隅が透明でない: {n}")
+            raw = Image.open(io.BytesIO(z.read(n)))
+            if raw.mode != "RGBA":
+                errors.append(f"RGBA でない: {n} (mode={raw.mode})")
+            im = raw.convert("RGBA")
+            w, h = im.size
+            for xy in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)):
+                if im.getpixel(xy)[3] != 0:
+                    errors.append(f"四隅が透明でない: {n} {xy}")
+                    break
     return errors
 
 
@@ -418,6 +429,14 @@ def validate_ghost_nar(nar: pathlib.Path, tpl_shell: pathlib.Path, base_body: bo
     texts = {n: z.read(n).decode("utf-8") for n in names if n.endswith(".txt")}
     files = {n.split("/")[-1] for n in names if n.startswith("shell/master/")}
     errors += _check_texts_and_refs(texts, files, "shell/master/")
+    note = texts.get("ghost/master/README-satori.txt", "")
+    m_hash = re.search(r"SHA-256 ([0-9a-f]{64})", note)
+    if "ghost/master/satori.dll" not in names:
+        errors.append("satori.dll が無い")
+    elif not m_hash:
+        errors.append("README-satori.txt に SHA-256 の記載が無い")
+    elif hashlib.sha256(z.read("ghost/master/satori.dll")).hexdigest() != m_hash.group(1):
+        errors.append("satori.dll が README-satori.txt のハッシュと不一致")
     tpl_hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in tpl_shell.glob("surface*.png")}
     for n in names:
         if not n.startswith("shell/master/surface"):
@@ -428,9 +447,15 @@ def validate_ghost_nar(nar: pathlib.Path, tpl_shell: pathlib.Path, base_body: bo
             continue
         sid = int(m.group(1))
         data = z.read(n)
-        im = Image.open(io.BytesIO(data)).convert("RGBA")
-        if im.getpixel((0, 0))[3] != 0:
-            errors.append(f"四隅が透明でない: {fn}")
+        raw = Image.open(io.BytesIO(data))
+        if raw.mode != "RGBA":
+            errors.append(f"RGBA でない: {fn} (mode={raw.mode})")
+        im = raw.convert("RGBA")
+        w, h = im.size
+        for xy in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)):
+            if im.getpixel(xy)[3] != 0:
+                errors.append(f"四隅が透明でない: {fn} {xy}")
+                break
         is_system = 10 <= sid <= 18 or 1100 <= sid <= 1115
         if is_system:
             if fn in tpl_hashes and hashlib.sha256(data).hexdigest() != tpl_hashes[fn]:
@@ -465,7 +490,7 @@ def mode_build(base_dir: pathlib.Path, work: pathlib.Path) -> int:
     ok = True
     for variant, mats in variants.items():
         shell_dir = build_shell(variant, mats, tpl_shell, work, name)
-        ghost_src = prepare_tree(base_dir / "ghost", name, work / f".ghost-src-{variant}", onboot_demo=True)
+        ghost_src = prepare_tree(base_dir / "ghost", name, work / f".ghost-src-{variant}", set_onboot=True)
         ghost_nar = pack_ghost(ghost_src, shell_dir, work / f"ghost-{variant}.nar")
         shell_nar = pack_shell(shell_dir, work / f"shell-{variant}.nar")
         shutil.rmtree(ghost_src)
@@ -480,7 +505,7 @@ def mode_base(base_dir: pathlib.Path, work: pathlib.Path) -> int:
         sys.exit(f"avatar.json が作業フォルダにありません: {work}（名前の取得に使います）")
     name = json.loads(avatar_json.read_text(encoding="utf-8"))["name"]
     tpl_shell = base_dir / "shell"
-    ghost_src = prepare_tree(base_dir / "ghost", name, work / ".ghost-src-base", onboot_demo=True)
+    ghost_src = prepare_tree(base_dir / "ghost", name, work / ".ghost-src-base", set_onboot=True)
     shell_src = prepare_tree(tpl_shell, name, work / ".shell-src-base")
     ghost_nar = pack_ghost(ghost_src, shell_src, work / "template-ghost.nar")
     shell_nar = pack_shell(shell_src, work / "template-shell.nar")
