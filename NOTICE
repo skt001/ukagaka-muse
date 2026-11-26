@@ -1,15 +1,14 @@
-# NOTICE
+NOTICE
 
-本リポジトリの成果物は、原則として MIT License（`LICENSE` を参照）です。
-ただし、以下に挙げる同梱バイナリは MIT License の対象外であり、独自の条件に従います。
+This project is licensed under the MIT License (see LICENSE), with one exception.
 
-## 里々（satori.dll）
+The file base/ghost/master/satori.dll (the SHIORI "Satori", Maintenance Team
+edition) is third-party software and is NOT covered by the MIT License.
+It is distributed under its own license, included at
+base/ghost/master/satori_license.txt, which permits redistribution including
+bundling with a ghost, provided the license document is included.
+See base/ghost/master/README-satori.txt for version and provenance details.
 
-- ファイル: satori.dll（テンプレートの nar 内、ghost/master/ に同梱）
-- 内容: SHIORI「里々（整備班版）」本体
-- 出所: 里々公式テンプレート「ポストと狛犬 V2」（ukatech/POST_and_KOMAINU_V2）
-  https://github.com/ukatech/POST_and_KOMAINU_V2
-- サイズ: 962,560 バイト
-- SHA-256: ee37194f6983e19b8ae3c900854910e98349f3b6d853e357a14edc9897bb9af1
-- ライセンス: 同梱の `satori_license.txt`（nar 内、ghost/master/）に従います。
-  再配布の条件は、同ライセンス文書を無変更で同梱することです。
+All other files in this repository are covered by the MIT License.
+
+Copyright (c) 2026 skt001 <skt001@gmail.com>

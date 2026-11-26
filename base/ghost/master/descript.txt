@@ -1,0 +1,14 @@
+charset,UTF-8
+
+name,__ASSISTANT_NAME__
+type,ghost
+
+sakura.name,__ASSISTANT_NAME__
+kero.name,System
+
+craftman,ukagaka-muse
+craftmanw,ukagaka-muse
+
+sstp.allowunspecifiedsend,1
+
+shiori,satori.dll

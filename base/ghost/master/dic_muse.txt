@@ -1,0 +1,15 @@
+＊OnBoot
+\1\s[11]\_w[2000]\0\s[1]\_w[2000]\0\s[2]\_w[2000]\1\s[12]\0\s[3]\_w[2000]\1\s[13]\0\s[4]\_w[2000]\1\s[14]\0\s[5]\_w[2000]\1\s[15]\0\s[6]\_w[2000]\1\s[16]\0\s[7]\_w[1000]\1\s[17]\0\s[8]\_w[2000]\1\s[18]\_w[1000]\0\s[0]\1\s[10]
+
+＊OnBalloonClose
+\0\s[0]\1\s[10]\e
+
+＊OnMouseDoubleClick
+＿muse.aiを開く	OpenMuse
+＿閉じる	Cancel
+
+＊OpenMuse
+\j[https://muse.ai]
+
+＊Cancel
+\e
