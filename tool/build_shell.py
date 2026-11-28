@@ -134,7 +134,9 @@ def glob1(directory: pathlib.Path, pattern: str) -> pathlib.Path:
 
 def load_materials(avatar_json: pathlib.Path) -> tuple[str, dict]:
     data = json.loads(avatar_json.read_text(encoding="utf-8"))
-    name = data["name"]
+    name = data.get("name")
+    if not name:
+        sys.exit("avatar.json に \"name\" がありません。アシスタント名を加えてください。")
     still = resolve(data["image_path"])
     if not still.exists():
         sys.exit(f"静止画が見つかりません: {still}")
@@ -308,7 +310,11 @@ def build_shell(variant: str, mats: dict, tpl_shell: pathlib.Path, out_root: pat
         blocks.append("\n".join(lines))
 
     tpl_surfaces = (tpl_shell / "surfaces.txt").read_text(encoding="utf-8")
-    blocks.append(tpl_surfaces[tpl_surfaces.index("surface10") :].rstrip() + "\n")
+    tpl_lines = tpl_surfaces.splitlines(keepends=True)
+    start = next((i for i, ln in enumerate(tpl_lines) if ln.rstrip("\r\n") == "surface10"), None)
+    if start is None:
+        sys.exit("テンプレートの surfaces.txt に surface10 の定義行がありません")
+    blocks.append("".join(tpl_lines[start:]).rstrip() + "\n")
     (shell_dir / "surfaces.txt").write_text("\n".join(blocks), encoding="utf-8")
 
     for fn in SYSTEM_FILES:
@@ -381,11 +387,36 @@ def pack_ghost(ghost_src: pathlib.Path, shell_dir: pathlib.Path, out_path: pathl
 
 # ---------- 検証 ----------
 
+# アカウント固有の値（ユーザー名を含む絶対パス）の検出パターン
+_ACCOUNT_PATTERNS = (
+    r"/home/[^/\s]+/",
+    r"/Users/[^/\s]+/",
+    r"[A-Za-z]:\\Users\\[^\\\s]+\\",
+)
+
+
 def _check_texts_and_refs(texts: dict, files: set, prefix: str) -> list[str]:
     errors = []
     for n, t in texts.items():
         if "__ASSISTANT_NAME__" in t:
             errors.append(f"プレイスホルダ残存: {n}")
+        if any(re.search(p, t) for p in _ACCOUNT_PATTERNS):
+            errors.append(f"アカウント固有の値の疑い（絶対パス）: {n}")
+    desc = texts.get(prefix + "descript.txt")
+    if desc is None:
+        errors.append(f"descript.txt がない: {prefix}")
+    elif not re.search(r"^seriko\.use_self_alpha,1\s*$", desc, re.M):
+        errors.append("descript.txt に seriko.use_self_alpha,1 がない")
+    inst = texts.get(prefix + "install.txt")
+    if inst is None:
+        errors.append(f"install.txt がない: {prefix}")
+    if desc is not None and inst is not None:
+        m_desc = re.search(r"^name,(.+)$", desc, re.M)
+        m_inst = re.search(r"^name,(.+)$", inst, re.M)
+        if not m_desc or not m_inst:
+            errors.append("descript.txt か install.txt に name がない")
+        elif m_desc.group(1).strip() != m_inst.group(1).strip():
+            errors.append(f"install.txt の name が descript.txt と不一致: {m_inst.group(1).strip()} != {m_desc.group(1).strip()}")
     surf = texts.get(prefix + "surfaces.txt")
     if surf is None:
         errors.append(f"surfaces.txt がない: {prefix}")
@@ -394,6 +425,10 @@ def _check_texts_and_refs(texts: dict, files: set, prefix: str) -> list[str]:
     for r in refs:
         if r != "-1" and f"surface{r}.png" not in files:
             errors.append(f"参照先なし: surface{r}.png")
+    for f in files:
+        m = re.fullmatch(r"surface(\d+)\.png", f)
+        if m and m.group(1) not in refs:
+            errors.append(f"参照されていないファイル: {f}")
     return errors
 
 
@@ -422,7 +457,7 @@ def validate_shell_nar(nar: pathlib.Path) -> list[str]:
     return errors
 
 
-def validate_ghost_nar(nar: pathlib.Path, tpl_shell: pathlib.Path, base_body: bool = False) -> list[str]:
+def validate_ghost_nar(nar: pathlib.Path, tpl_shell: pathlib.Path, tpl_ghost: pathlib.Path, base_body: bool = False) -> list[str]:
     errors = []
     z = zipfile.ZipFile(nar)
     names = z.namelist()
@@ -437,6 +472,14 @@ def validate_ghost_nar(nar: pathlib.Path, tpl_shell: pathlib.Path, base_body: bo
         errors.append("README-satori.txt に SHA-256 の記載が無い")
     elif hashlib.sha256(z.read("ghost/master/satori.dll")).hexdigest() != m_hash.group(1):
         errors.append("satori.dll が README-satori.txt のハッシュと不一致")
+    if "install.txt" not in names:
+        errors.append("install.txt が無い")
+    elif not re.search(r"^type,ghost\s*$", texts.get("install.txt", ""), re.M):
+        errors.append("install.txt の type が ghost でない")
+    if "ghost/master/satori_license.txt" not in names:
+        errors.append("satori_license.txt が無い")
+    elif hashlib.sha256(z.read("ghost/master/satori_license.txt")).hexdigest() != hashlib.sha256((tpl_ghost / "master" / "satori_license.txt").read_bytes()).hexdigest():
+        errors.append("satori_license.txt がテンプレートと相違（改変されている）")
     tpl_hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in tpl_shell.glob("surface*.png")}
     for n in names:
         if not n.startswith("shell/master/surface"):
@@ -494,7 +537,7 @@ def mode_build(base_dir: pathlib.Path, work: pathlib.Path) -> int:
         ghost_nar = pack_ghost(ghost_src, shell_dir, work / f"ghost-{variant}.nar")
         shell_nar = pack_shell(shell_dir, work / f"shell-{variant}.nar")
         shutil.rmtree(ghost_src)
-        ok &= report(f"ghost-{variant}", ghost_nar, validate_ghost_nar(ghost_nar, tpl_shell))
+        ok &= report(f"ghost-{variant}", ghost_nar, validate_ghost_nar(ghost_nar, tpl_shell, base_dir / "ghost"))
         ok &= report(f"shell-{variant}", shell_nar, validate_shell_nar(shell_nar))
     return 0 if ok else 1
 
@@ -503,7 +546,10 @@ def mode_base(base_dir: pathlib.Path, work: pathlib.Path) -> int:
     avatar_json = work / "avatar.json"
     if not avatar_json.exists():
         sys.exit(f"avatar.json が作業フォルダにありません: {work}（名前の取得に使います）")
-    name = json.loads(avatar_json.read_text(encoding="utf-8"))["name"]
+    data = json.loads(avatar_json.read_text(encoding="utf-8"))
+    name = data.get("name")
+    if not name:
+        sys.exit("avatar.json に \"name\" がありません。アシスタント名を加えてください。")
     tpl_shell = base_dir / "shell"
     ghost_src = prepare_tree(base_dir / "ghost", name, work / ".ghost-src-base", set_onboot=True)
     shell_src = prepare_tree(tpl_shell, name, work / ".shell-src-base")
@@ -511,7 +557,7 @@ def mode_base(base_dir: pathlib.Path, work: pathlib.Path) -> int:
     shell_nar = pack_shell(shell_src, work / "template-shell.nar")
     shutil.rmtree(ghost_src)
     shutil.rmtree(shell_src)
-    ok = report("template-ghost", ghost_nar, validate_ghost_nar(ghost_nar, tpl_shell, base_body=True))
+    ok = report("template-ghost", ghost_nar, validate_ghost_nar(ghost_nar, tpl_shell, base_dir / "ghost", base_body=True))
     ok &= report("template-shell", shell_nar, validate_shell_nar(shell_nar))
     return 0 if ok else 1
 
